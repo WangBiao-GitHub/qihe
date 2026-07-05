@@ -1,23 +1,26 @@
 "use client";
 
 import { useState } from "react";
-import { Paperclip } from "lucide-react";
-import { ChatBubble, LoadingMessage, PromptBox } from "@/components/chat";
-import { ContractCard } from "@/components/contract-card";
+import { Download, FileText, Paperclip } from "lucide-react";
+import { ChatBubble, FeedbackActions, LoadingMessage, PromptBox } from "@/components/chat";
 import {
   HomeIndicator,
   PhoneFrame,
   StatusBar,
   TopNav,
 } from "@/components/mobile-shell";
-import { fullContractDraft, stoppedContractDraft } from "@/data/mock";
-import { mockGenerateContractDraft } from "@/lib/ai-placeholders";
-import type { ContractDraft } from "@/lib/types";
+import { generateContractDraft } from "@/lib/ai-placeholders";
+import { Markdown } from "@/lib/markdown";
+import {
+  hasContractContent,
+  splitContractAndChat,
+} from "@/lib/detect-contract";
+import { downloadContractAsPdf } from "@/lib/download-contract";
 
 type ChatMessage =
   | { id: string; kind: "user"; text: string }
   | { id: string; kind: "assistant"; text: string }
-  | { id: string; kind: "contract"; draft: ContractDraft }
+  | { id: string; kind: "contract"; text: string }
   | { id: string; kind: "file"; fileName: string };
 
 export default function GeneratePage() {
@@ -25,64 +28,78 @@ export default function GeneratePage() {
   const [loading, setLoading] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [pendingFile, setPendingFile] = useState<File | null>(null);
+  const [conversationId, setConversationId] = useState("");
 
   function handleFileUpload(file: File) {
     setPendingFile(file);
   }
 
   async function handleSend() {
-    const text = input.trim() || "帮我写一份租房合同。";
+    const text = input.trim();
+    if (!text) return;
     setInput("");
 
-    if (messages.length === 0) {
-      const initialMessages: ChatMessage[] = [
-        { id: "user-1", kind: "user", text },
-      ];
-      if (pendingFile) {
-        initialMessages.push({
-          id: "file-1",
-          kind: "file",
-          fileName: pendingFile.name,
-        });
-      }
-      setMessages(initialMessages);
-      setPendingFile(null);
-      setLoading(true);
-      await mockGenerateContractDraft(text);
-      setLoading(false);
-      setMessages([
-        ...initialMessages,
-        {
-          id: "assistant-1",
-          kind: "assistant",
-          text: "请介绍案件背景、您的立场、您的要求和文书类型。描述越详细，起草越高效",
-        },
-        { id: "contract-1", kind: "contract", draft: stoppedContractDraft },
-      ]);
-      return;
-    }
-
-    const nextDraft = await mockGenerateContractDraft(text);
-    const newMessages: ChatMessage[] = [
-      { id: `user-${messages.length}`, kind: "user", text },
-    ];
+    const userMsg: ChatMessage = {
+      id: `user-${Date.now()}`,
+      kind: "user",
+      text,
+    };
+    const newMessages: ChatMessage[] = [userMsg];
     if (pendingFile) {
       newMessages.push({
-        id: `file-${messages.length + 1}`,
+        id: `file-${Date.now()}`,
         kind: "file",
         fileName: pendingFile.name,
       });
     }
+
+    setMessages((prev) => [...prev, ...newMessages]);
     setPendingFile(null);
-    setMessages((current) => [
-      ...current,
-      ...newMessages,
-      {
-        id: `contract-${current.length + newMessages.length}`,
-        kind: "contract",
-        draft: nextDraft.status ? fullContractDraft : nextDraft,
-      },
-    ]);
+    setLoading(true);
+
+    try {
+      const result = await generateContractDraft(text, conversationId);
+      setConversationId(result.conversationId);
+
+      const responseMessages: ChatMessage[] = [];
+
+      if (hasContractContent(result.text)) {
+        const { chatText, contractText } = splitContractAndChat(result.text);
+
+        if (chatText) {
+          responseMessages.push({
+            id: `assistant-${Date.now()}`,
+            kind: "assistant",
+            text: chatText,
+          });
+        }
+
+        responseMessages.push({
+          id: `contract-${Date.now()}`,
+          kind: "contract",
+          text: contractText,
+        });
+      } else {
+        responseMessages.push({
+          id: `assistant-${Date.now()}`,
+          kind: "assistant",
+          text: result.text,
+        });
+      }
+
+      setMessages((prev) => [...prev, ...responseMessages]);
+    } catch {
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: `error-${Date.now()}`,
+          kind: "assistant",
+          text: "抱歉，请求失败，请稍后重试。",
+        },
+      ]);
+    } finally {
+      setLoading(false);
+    }
   }
 
   return (
@@ -113,8 +130,14 @@ export default function GeneratePage() {
               if (message.kind === "assistant") {
                 return (
                   <ChatBubble key={message.id} role="assistant">
-                    {message.text}
+                    <Markdown content={message.text} />
                   </ChatBubble>
+                );
+              }
+
+              if (message.kind === "contract") {
+                return (
+                  <ContractMarkdownCard key={message.id} content={message.text} />
                 );
               }
 
@@ -123,13 +146,15 @@ export default function GeneratePage() {
                   <div key={message.id} className="flex justify-end">
                     <div className="flex items-center gap-2 rounded-2xl rounded-tr-md bg-slate-100 px-4 py-3 text-sm text-slate-700">
                       <Paperclip size={16} className="text-slate-400" />
-                      <span className="max-w-[200px] truncate">{message.fileName}</span>
+                      <span className="max-w-[200px] truncate">
+                        {message.fileName}
+                      </span>
                     </div>
                   </div>
                 );
               }
 
-              return <ContractCard key={message.id} draft={message.draft} />;
+              return null;
             })}
             {loading ? <LoadingMessage /> : null}
           </div>
@@ -163,7 +188,9 @@ function InitialGenerateState({
 }) {
   return (
     <section className="flex flex-1 flex-col px-8 pt-28">
-      <h1 className="text-center text-3xl font-bold text-slate-950">合同生成</h1>
+      <h1 className="text-center text-3xl font-bold text-slate-950">
+        合同生成
+      </h1>
       <PromptBox
         value={value}
         onChange={onChange}
@@ -173,10 +200,34 @@ function InitialGenerateState({
         placeholder="请描述你的租房合同需求，例如：帮我写一份租房合同。"
         className="mt-8 border-slate-950 shadow-none"
       />
-      <p className="mt-28 text-center text-sm text-slate-200">聊天框以下保持空白</p>
       <div className="mt-auto">
         <HomeIndicator />
       </div>
     </section>
+  );
+}
+
+function ContractMarkdownCard({ content }: { content: string }) {
+  return (
+    <article className="relative rounded-lg bg-white p-5 shadow-sm ring-1 ring-slate-100">
+      <div className="mb-3 flex items-center justify-between">
+        <div className="flex items-center gap-2 text-xs font-medium text-slate-400">
+          <FileText size={14} />
+          <span>租房合同</span>
+        </div>
+        <button
+          type="button"
+          onClick={() => downloadContractAsPdf(content)}
+          className="flex items-center gap-1.5 rounded-lg bg-blue-50 px-3 py-1.5 text-xs font-medium text-blue-600 transition-colors hover:bg-blue-100"
+        >
+          <Download size={13} />
+          下载 PDF
+        </button>
+      </div>
+      <div className="text-slate-700">
+        <Markdown content={content} />
+      </div>
+      <FeedbackActions content={content} />
+    </article>
   );
 }

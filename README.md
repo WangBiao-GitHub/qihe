@@ -38,10 +38,14 @@ npm run dev
 ## 主要目录
 
 - `src/app/page.tsx` 首页与历史对话侧页
-- `src/app/generate/page.tsx` 合同生成页
+- `src/app/generate/page.tsx` 合同生成页（已接入 Dify Chatflow）
 - `src/app/review/page.tsx` 合同审查页
+- `src/app/api/chat/route.ts` Dify API 代理路由（保护 API Key）
 - `src/components/` 可复用 UI 组件
+- `src/lib/dify.ts` Dify 流式 SSE 客户端
 - `src/lib/ai-placeholders.ts` AI 调用封装
+- `src/lib/markdown.tsx` 轻量 Markdown 渲染器
+- `src/lib/detect-contract.ts` 合同内容检测与拆分
+- `src/lib/download-contract.ts` 合同 PDF 下载（自动去除占位提示）
 - `src/lib/types.ts` 类型定义
-- `src/lib/utils.ts` 工具函数
 - `src/data/mock.ts` mock 假数据
